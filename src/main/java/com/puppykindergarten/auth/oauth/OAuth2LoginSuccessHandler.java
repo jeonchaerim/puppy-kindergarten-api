@@ -1,5 +1,6 @@
 package com.puppykindergarten.auth.oauth;
 
+import com.fasterxml.jackson.annotation.JsonUnwrapped;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.puppykindergarten.auth.token.AuthTokenService;
 import com.puppykindergarten.auth.token.TokenPair;
@@ -8,8 +9,6 @@ import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.HttpSession;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.util.LinkedHashMap;
-import java.util.Map;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.security.core.Authentication;
@@ -43,14 +42,7 @@ public class OAuth2LoginSuccessHandler implements AuthenticationSuccessHandler {
 
         TokenPair tokens = authTokenService.issue(user.getUserId(), user.getRole());
 
-        Map<String, Object> body = new LinkedHashMap<>();
-        body.put("tokenType", tokens.tokenType());
-        body.put("accessToken", tokens.accessToken());
-        body.put("accessTokenExpiresIn", tokens.accessTokenExpiresIn());
-        body.put("refreshToken", tokens.refreshToken());
-        body.put("userId", user.getUserId());
-        body.put("nickname", user.getNickname());
-        body.put("role", user.getRole().name());
+        LoginResponse body = new LoginResponse(tokens, user.getUserId(), user.getNickname(), user.getRole().name());
 
         response.setStatus(HttpServletResponse.SC_OK);
         // 토큰이 담긴 응답이 브라우저/프록시에 캐시되지 않게 한다.
@@ -58,5 +50,9 @@ public class OAuth2LoginSuccessHandler implements AuthenticationSuccessHandler {
         response.setContentType(MediaType.APPLICATION_JSON_VALUE);
         response.setCharacterEncoding(StandardCharsets.UTF_8.name());
         objectMapper.writeValue(response.getWriter(), body);
+    }
+
+    /** 로그인 응답. 토큰 필드는 재발급 응답과 같은 {@link TokenPair} 를 펼쳐서 담는다. */
+    public record LoginResponse(@JsonUnwrapped TokenPair tokens, Long userId, String nickname, String role) {
     }
 }
