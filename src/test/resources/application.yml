@@ -1,0 +1,11 @@
+# 테스트는 외부 MySQL 없이 돌 수 있도록 H2(MySQL 호환 모드)를 사용한다.
+spring:
+  datasource:
+    url: jdbc:h2:mem:testdb;MODE=MySQL;DB_CLOSE_DELAY=-1
+    username: sa
+    password:
+    driver-class-name: org.h2.Driver
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: create-drop
