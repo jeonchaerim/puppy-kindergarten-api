@@ -7,6 +7,7 @@ import com.puppykindergarten.auth.oauth.OAuth2LoginSuccessHandler;
 import java.util.List;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
@@ -38,6 +39,8 @@ public class SecurityConfig {
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/oauth2/authorization/**", "/login/oauth2/code/**", "/error").permitAll()
+                        // Refresh Token 으로 자격을 확인하는 API. Access Token 이 만료된 뒤에도 호출할 수 있어야 한다.
+                        .requestMatchers(HttpMethod.POST, "/api/auth/reissue", "/api/auth/logout").permitAll()
                         .anyRequest().authenticated())
                 // 1) 카카오 로그인 → 자체 JWT 발급
                 .oauth2Login(oauth -> oauth
