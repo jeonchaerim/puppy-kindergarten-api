@@ -28,6 +28,7 @@ import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMock
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.SpyBean;
 import org.springframework.dao.DataAccessResourceFailureException;
+import org.springframework.transaction.CannotCreateTransactionException;
 import org.springframework.mock.web.MockHttpSession;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -331,6 +332,19 @@ class KakaoLoginFlowTest {
         callback(startLogin(), "code-1")
                 .andExpect(status().isInternalServerError())
                 .andExpect(jsonPath("$.code").value("INTERNAL_ERROR"));
+    }
+
+    @Test
+    @DisplayName("로그인 중 DB 연결 자체가 안 되면(트랜잭션 시작 실패) 500 을 공통 에러 형식으로 응답한다")
+    void dbConnectionFailureDuringLoginReturns500() throws Exception {
+        KAKAO.respondWithUser(1001L, "초코아빠");
+        doThrow(new CannotCreateTransactionException("Could not open JPA EntityManager for transaction"))
+                .when(kakaoLoginService).loginOrRegister(any(), any());
+
+        callback(startLogin(), "code-1")
+                .andExpect(status().isInternalServerError())
+                .andExpect(jsonPath("$.code").value("INTERNAL_ERROR"))
+                .andExpect(jsonPath("$.accessToken").doesNotExist());
     }
 
     private record LoginAttempt(MockHttpSession session, String state) {
