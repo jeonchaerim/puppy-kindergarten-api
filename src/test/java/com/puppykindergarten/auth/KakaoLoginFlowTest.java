@@ -2,12 +2,20 @@ package com.puppykindergarten.auth;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.puppykindergarten.auth.jwt.JwtTokenProvider;
+import com.puppykindergarten.auth.token.RefreshToken;
+import com.puppykindergarten.auth.token.RefreshTokenRepository;
+import com.puppykindergarten.auth.token.TokenHasher;
 import com.puppykindergarten.user.Role;
 import com.puppykindergarten.user.User;
 import com.puppykindergarten.user.UserRepository;
+import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -21,6 +29,7 @@ import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.ResultActions;
+import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.util.UriComponentsBuilder;
 
 /**
@@ -46,9 +55,19 @@ class KakaoLoginFlowTest {
     @Autowired
     UserRepository userRepository;
 
+    @Autowired
+    RefreshTokenRepository refreshTokenRepository;
+
+    @Autowired
+    JwtTokenProvider jwtTokenProvider;
+
+    @Autowired
+    ObjectMapper objectMapper;
+
     @BeforeEach
     void setUp() {
         KAKAO.reset();
+        refreshTokenRepository.deleteAll();
         userRepository.deleteAll();
     }
 
@@ -185,6 +204,41 @@ class KakaoLoginFlowTest {
             request = request.session(after);
         }
         mockMvc.perform(request).andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("로그인 성공 시 자체 JWT(Access/Refresh)를 발급하고, Access Token 으로 API 를 호출할 수 있다")
+    void loginIssuesUsableTokens() throws Exception {
+        KAKAO.respondWithUser(9001L, "해피원장");
+
+        MvcResult login = callback(startLogin(), "code-1")
+                .andExpect(status().isOk())
+                .andExpect(header().string("Cache-Control", "no-store"))
+                .andExpect(jsonPath("$.tokenType").value("Bearer"))
+                .andExpect(jsonPath("$.accessTokenExpiresIn").value(900))
+                .andReturn();
+        JsonNode body = objectMapper.readTree(login.getResponse().getContentAsString());
+        String accessToken = body.get("accessToken").asText();
+        String refreshToken = body.get("refreshToken").asText();
+
+        // Access Token 클레임: 사용자 식별자 + 역할
+        Jwt jwt = jwtTokenProvider.accessTokenDecoder().decode(accessToken);
+        assertThat(jwt.getSubject()).isEqualTo(body.get("userId").asText());
+        assertThat(jwt.getClaimAsString("role")).isEqualTo("DIRECTOR");
+
+        // 발급받은 Access Token 으로 보호된 API 호출
+        mockMvc.perform(get("/api/users/me").header("Authorization", "Bearer " + accessToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.nickname").value("해피원장"))
+                .andExpect(jsonPath("$.role").value("DIRECTOR"));
+
+        // Refresh Token 은 원문이 아니라 해시로만 저장된다.
+        List<RefreshToken> stored = refreshTokenRepository.findAll();
+        assertThat(stored).hasSize(1);
+        assertThat(stored.get(0).getTokenHash())
+                .isEqualTo(TokenHasher.sha256Hex(refreshToken))
+                .isNotEqualTo(refreshToken);
+        assertThat(stored.get(0).getUserId()).isEqualTo(body.get("userId").asLong());
     }
 
     private record LoginAttempt(MockHttpSession session, String state) {
