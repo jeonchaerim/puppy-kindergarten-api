@@ -125,11 +125,13 @@ Refresh Token 도 JWT 로 발급해 서명·만료를 먼저 검증하고, DB �
 
 ### 카카오 애플리케이션 설정
 
-1. 애플리케이션 추가 → **앱 키 > REST API 키** 확인 (`KAKAO_CLIENT_ID`)
-2. **카카오 로그인** 활성화
-3. **Redirect URI** 등록: `http://localhost:8080/login/oauth2/code/kakao`
-4. **보안 > Client Secret** 발급, 사용함으로 설정 (`KAKAO_CLIENT_SECRET`)
-5. **동의항목**: 닉네임(`profile_nickname`) 설정
+1. 애플리케이션 추가
+2. **[앱] > [플랫폼 키] > [REST API 키]** 에서
+   - REST API 키 확인 (`KAKAO_CLIENT_ID`)
+   - 카카오 로그인 리다이렉트 URI 등록: `http://localhost:8080/login/oauth2/code/kakao`
+   - 클라이언트 시크릿 코드 확인 (`KAKAO_CLIENT_SECRET`, 기본 활성화 상태)
+3. **[카카오 로그인] > [사용 설정]** 상태 ON
+4. **[카카오 로그인] > [동의항목]** 에서 닉네임(`profile_nickname`) 설정
 
 ### 실행
 
