@@ -54,7 +54,7 @@ public class AuthTokenService {
     @Transactional
     public TokenPair reissue(String refreshToken) {
         Jwt jwt = decode(refreshToken);
-        Long userId = Long.valueOf(jwt.getSubject());
+        Long userId = JwtTokenProvider.userIdOf(jwt);
 
         // 저장소에 없으면 이미 교체됐거나 로그아웃된 토큰이다.
         int revoked = refreshTokenRepository.deleteByTokenHash(TokenHasher.sha256Hex(refreshToken));
