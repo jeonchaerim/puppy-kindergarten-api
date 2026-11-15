@@ -1,6 +1,8 @@
 package com.puppykindergarten.auth;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -9,6 +11,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.puppykindergarten.auth.jwt.JwtTokenProvider;
+import com.puppykindergarten.auth.token.AuthTokenService;
 import com.puppykindergarten.auth.token.RefreshToken;
 import com.puppykindergarten.auth.token.RefreshTokenRepository;
 import com.puppykindergarten.auth.token.TokenHasher;
@@ -23,6 +26,8 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.mock.mockito.SpyBean;
+import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.mock.web.MockHttpSession;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -63,6 +68,12 @@ class KakaoLoginFlowTest {
 
     @Autowired
     ObjectMapper objectMapper;
+
+    @SpyBean
+    AuthTokenService authTokenService;
+
+    @SpyBean
+    KakaoLoginService kakaoLoginService;
 
     @BeforeEach
     void setUp() {
@@ -262,6 +273,64 @@ class KakaoLoginFlowTest {
                 .andExpect(jsonPath("$.role").value("DIRECTOR"))
                 .andExpect(jsonPath("$.todayAttendance").value(5))
                 .andExpect(jsonPath("$.myDogs").doesNotExist());
+    }
+
+    @Test
+    @DisplayName("카카오 토큰 교환이 제한 시간 안에 응답하지 않으면 기다리지 않고 503 을 응답한다")
+    void tokenEndpointTimeoutReturns503() throws Exception {
+        KAKAO.respondWithUser(1001L, "초코아빠");
+        KAKAO.delayTokenEndpoint(4000); // 테스트 설정의 응답 제한 시간은 1초
+
+        long startedAt = System.nanoTime();
+        callback(startLogin(), "code-slow")
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.code").value("KAKAO_UNAVAILABLE"));
+        long elapsedMillis = (System.nanoTime() - startedAt) / 1_000_000;
+
+        assertThat(elapsedMillis).isLessThan(3000);
+        assertThat(userRepository.count()).isZero();
+    }
+
+    @Test
+    @DisplayName("카카오 사용자 정보 조회가 제한 시간 안에 응답하지 않으면 503 을 응답하고 가입시키지 않는다")
+    void userInfoEndpointTimeoutReturns503() throws Exception {
+        KAKAO.respondWithUser(1001L, "초코아빠");
+        KAKAO.delayUserInfoEndpoint(4000);
+
+        long startedAt = System.nanoTime();
+        callback(startLogin(), "code-slow")
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.code").value("KAKAO_UNAVAILABLE"));
+        long elapsedMillis = (System.nanoTime() - startedAt) / 1_000_000;
+
+        assertThat(elapsedMillis).isLessThan(3000);
+        assertThat(userRepository.count()).isZero();
+    }
+
+    @Test
+    @DisplayName("토큰 저장 중 DB 오류가 나면 401 이 아닌 500 을 공통 에러 형식으로 응답한다")
+    void tokenIssueFailureReturns500InCommonFormat() throws Exception {
+        KAKAO.respondWithUser(1001L, "초코아빠");
+        doThrow(new DataAccessResourceFailureException("DB down"))
+                .when(authTokenService).issue(any(), any());
+
+        callback(startLogin(), "code-1")
+                .andExpect(status().isInternalServerError())
+                .andExpect(jsonPath("$.code").value("INTERNAL_ERROR"))
+                .andExpect(jsonPath("$.message").value("서버 오류가 발생했습니다."))
+                .andExpect(jsonPath("$.accessToken").doesNotExist());
+    }
+
+    @Test
+    @DisplayName("회원 저장 중 DB 오류가 나면 로그인 실패(401)와 구분해 500 을 응답한다")
+    void userSaveFailureReturns500InCommonFormat() throws Exception {
+        KAKAO.respondWithUser(1001L, "초코아빠");
+        doThrow(new DataAccessResourceFailureException("DB down"))
+                .when(kakaoLoginService).loginOrRegister(any(), any());
+
+        callback(startLogin(), "code-1")
+                .andExpect(status().isInternalServerError())
+                .andExpect(jsonPath("$.code").value("INTERNAL_ERROR"));
     }
 
     private record LoginAttempt(MockHttpSession session, String state) {

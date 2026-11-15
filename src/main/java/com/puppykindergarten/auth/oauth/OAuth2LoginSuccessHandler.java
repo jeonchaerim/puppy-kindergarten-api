@@ -4,12 +4,16 @@ import com.fasterxml.jackson.annotation.JsonUnwrapped;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.puppykindergarten.auth.token.AuthTokenService;
 import com.puppykindergarten.auth.token.TokenPair;
+import com.puppykindergarten.config.ErrorResponseWriter;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.HttpSession;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.web.authentication.AuthenticationSuccessHandler;
@@ -22,12 +26,17 @@ import org.springframework.stereotype.Component;
 @Component
 public class OAuth2LoginSuccessHandler implements AuthenticationSuccessHandler {
 
+    private static final Logger log = LoggerFactory.getLogger(OAuth2LoginSuccessHandler.class);
+
     private final AuthTokenService authTokenService;
     private final ObjectMapper objectMapper;
+    private final ErrorResponseWriter errorResponseWriter;
 
-    public OAuth2LoginSuccessHandler(AuthTokenService authTokenService, ObjectMapper objectMapper) {
+    public OAuth2LoginSuccessHandler(AuthTokenService authTokenService, ObjectMapper objectMapper,
+                                     ErrorResponseWriter errorResponseWriter) {
         this.authTokenService = authTokenService;
         this.objectMapper = objectMapper;
+        this.errorResponseWriter = errorResponseWriter;
     }
 
     @Override
@@ -40,7 +49,17 @@ public class OAuth2LoginSuccessHandler implements AuthenticationSuccessHandler {
             session.invalidate();
         }
 
-        TokenPair tokens = authTokenService.issue(user.getUserId(), user.getRole());
+        TokenPair tokens;
+        try {
+            tokens = authTokenService.issue(user.getUserId(), user.getRole());
+        } catch (RuntimeException e) {
+            // 여기는 컨트롤러 밖이라 공통 예외 처리(GlobalExceptionHandler)를 거치지 않는다.
+            // 인증은 성공했지만 토큰을 저장하지 못한 서버 오류이므로, 401 이 아닌 500 을 공통 형식으로 응답한다.
+            log.error("로그인 토큰 발급 실패: userId={}", user.getUserId(), e);
+            errorResponseWriter.write(response, HttpStatus.INTERNAL_SERVER_ERROR,
+                    "INTERNAL_ERROR", "서버 오류가 발생했습니다.");
+            return;
+        }
 
         LoginResponse body = new LoginResponse(tokens, user.getUserId(), user.getNickname(), user.getRole().name());
 

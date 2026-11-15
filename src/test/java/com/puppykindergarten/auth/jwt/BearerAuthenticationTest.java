@@ -5,6 +5,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.nimbusds.jose.jwk.source.ImmutableSecret;
 import com.puppykindergarten.auth.KakaoLoginService;
 import com.puppykindergarten.user.Role;
 import com.puppykindergarten.user.User;
@@ -15,6 +16,9 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.Base64;
+import java.util.List;
+import java.util.function.Consumer;
+import javax.crypto.spec.SecretKeySpec;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -22,6 +26,11 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.HttpHeaders;
+import org.springframework.security.oauth2.jose.jws.MacAlgorithm;
+import org.springframework.security.oauth2.jwt.JwsHeader;
+import org.springframework.security.oauth2.jwt.JwtClaimsSet;
+import org.springframework.security.oauth2.jwt.JwtEncoderParameters;
+import org.springframework.security.oauth2.jwt.NimbusJwtEncoder;
 import org.springframework.test.web.servlet.MockMvc;
 
 /**
@@ -124,10 +133,50 @@ class BearerAuthenticationTest {
     }
 
     @Test
+    @DisplayName("서명은 유효하지만 exp 가 없는 토큰은 401 INVALID_TOKEN (만료 없는 토큰 차단)")
+    void tokenWithoutExpiryIsRejected() throws Exception {
+        String token = signedToken(claims -> claims.subject(String.valueOf(owner.getId())).issuedAt(Instant.now()));
+
+        mockMvc.perform(get("/api/home").header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("INVALID_TOKEN"));
+    }
+
+    @Test
+    @DisplayName("서명은 유효하지만 sub 가 없거나 숫자가 아닌 토큰은 500 이 아니라 401 INVALID_TOKEN")
+    void tokenWithoutValidSubjectIsRejected() throws Exception {
+        Instant now = Instant.now();
+        String noSubject = signedToken(claims -> claims.issuedAt(now).expiresAt(now.plusSeconds(60)));
+        String textSubject = signedToken(claims -> claims.subject("not-a-number").issuedAt(now).expiresAt(now.plusSeconds(60)));
+        String zeroSubject = signedToken(claims -> claims.subject("0").issuedAt(now).expiresAt(now.plusSeconds(60)));
+
+        for (String token : List.of(noSubject, textSubject, zeroSubject)) {
+            for (String path : List.of("/api/home", "/api/users/me")) {
+                mockMvc.perform(get(path).header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+                        .andExpect(status().isUnauthorized())
+                        .andExpect(jsonPath("$.code").value("INVALID_TOKEN"));
+            }
+        }
+    }
+
+    @Test
     @DisplayName("JWT 형식이 아닌 값은 401 INVALID_TOKEN")
     void malformedTokenIsRejected() throws Exception {
         mockMvc.perform(get("/api/users/me").header(HttpHeaders.AUTHORIZATION, "Bearer not-a-jwt"))
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.code").value("INVALID_TOKEN"));
+    }
+
+    /** 서버 키로 서명한 Access Token. 클레임 구성만 호출부에서 정한다. (비정상 클레임 검증용) */
+    private String signedToken(Consumer<JwtClaimsSet.Builder> customizer) {
+        JwtClaimsSet.Builder claims = JwtClaimsSet.builder()
+                .issuer(jwtProperties.issuer())
+                .claim("token_type", "access")
+                .claim("role", "OWNER");
+        customizer.accept(claims);
+        NimbusJwtEncoder encoder = new NimbusJwtEncoder(
+                new ImmutableSecret<>(new SecretKeySpec(jwtProperties.secretBytes(), "HmacSHA256")));
+        return encoder.encode(JwtEncoderParameters.from(JwsHeader.with(MacAlgorithm.HS256).build(), claims.build()))
+                .getTokenValue();
     }
 }
