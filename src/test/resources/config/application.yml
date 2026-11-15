@@ -1,0 +1,22 @@
+# 테스트 전용 덮어쓰기. (classpath:/config/ 는 main 의 application.yml 보다 우선한다)
+# 외부 MySQL/카카오 없이 돌 수 있도록 H2(MySQL 호환 모드)와 더미 클라이언트 값을 사용한다.
+spring:
+  datasource:
+    url: jdbc:h2:mem:testdb;MODE=MySQL;DB_CLOSE_DELAY=-1
+    username: sa
+    password:
+    driver-class-name: org.h2.Driver
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+  security:
+    oauth2:
+      client:
+        registration:
+          kakao:
+            client-id: test-client-id
+            client-secret: test-client-secret
+
+app:
+  auth:
+    director-kakao-ids: 9001,9002
