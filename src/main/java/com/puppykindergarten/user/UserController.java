@@ -1,5 +1,6 @@
 package com.puppykindergarten.user;
 
+import com.puppykindergarten.auth.jwt.JwtTokenProvider;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
@@ -21,12 +22,13 @@ public class UserController {
     /** 토큰의 주인(sub)에 해당하는 내 정보. */
     @GetMapping("/me")
     public MeResponse me(@AuthenticationPrincipal Jwt jwt) {
-        Long userId = Long.valueOf(jwt.getSubject());
+        Long userId = JwtTokenProvider.userIdOf(jwt);
         return userRepository.findById(userId)
-                .map(user -> new MeResponse(user.getId(), user.getNickname(), user.getRole().name()))
+                .map(user -> new MeResponse(user.getId(), user.getKakaoId(), user.getNickname(), user.getRole().name()))
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "사용자를 찾을 수 없습니다."));
     }
 
-    public record MeResponse(Long userId, String nickname, String role) {
+    /** kakaoId 는 원장 지정(DIRECTOR_KAKAO_IDS)에 쓰는 카카오 회원번호다. */
+    public record MeResponse(Long userId, Long kakaoId, String nickname, String role) {
     }
 }

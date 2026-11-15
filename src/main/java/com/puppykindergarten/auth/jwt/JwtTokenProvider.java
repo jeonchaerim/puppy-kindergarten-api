@@ -75,6 +75,11 @@ public class JwtTokenProvider {
         return new IssuedRefreshToken(encode(claims), expiresAt);
     }
 
+    /** 검증된 토큰의 주인(sub 클레임 = users.id). 토큰에서 사용자 ID 를 꺼내는 곳은 여기 하나다. */
+    public static Long userIdOf(Jwt jwt) {
+        return Long.valueOf(jwt.getSubject());
+    }
+
     /** API 인증(Bearer)에 쓰는 디코더. 서명, 만료, issuer, token_type=access 를 검증한다. */
     public JwtDecoder accessTokenDecoder() {
         return accessTokenDecoder;
