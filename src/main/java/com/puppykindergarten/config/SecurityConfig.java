@@ -7,6 +7,7 @@ import com.puppykindergarten.auth.oauth.OAuth2LoginSuccessHandler;
 import java.util.List;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
@@ -15,10 +16,20 @@ import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
+import org.springframework.security.oauth2.server.resource.web.BearerTokenResolver;
+import org.springframework.security.oauth2.server.resource.web.DefaultBearerTokenResolver;
+import org.springframework.security.web.util.matcher.AntPathRequestMatcher;
+import org.springframework.security.web.util.matcher.OrRequestMatcher;
+import org.springframework.security.web.util.matcher.RequestMatcher;
 import org.springframework.security.web.SecurityFilterChain;
 
 @Configuration
 public class SecurityConfig {
+
+    /** Refresh Token 으로 자격을 확인하는 API. Access Token 이 만료된 뒤에도 호출할 수 있어야 한다. */
+    private static final RequestMatcher REFRESH_TOKEN_ENDPOINTS = new OrRequestMatcher(
+            new AntPathRequestMatcher("/api/auth/reissue", HttpMethod.POST.name()),
+            new AntPathRequestMatcher("/api/auth/logout", HttpMethod.POST.name()));
 
     @Bean
     SecurityFilterChain securityFilterChain(HttpSecurity http,
@@ -38,6 +49,7 @@ public class SecurityConfig {
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/oauth2/authorization/**", "/login/oauth2/code/**", "/error").permitAll()
+                        .requestMatchers(REFRESH_TOKEN_ENDPOINTS).permitAll()
                         .anyRequest().authenticated())
                 // 1) 카카오 로그인 → 자체 JWT 발급
                 .oauth2Login(oauth -> oauth
@@ -49,6 +61,7 @@ public class SecurityConfig {
                         .jwt(jwt -> jwt
                                 .decoder(jwtDecoder)
                                 .jwtAuthenticationConverter(jwtAuthenticationConverter()))
+                        .bearerTokenResolver(bearerTokenResolver())
                         .authenticationEntryPoint(authenticationEntryPoint))
                 // 미인증 요청을 로그인 페이지로 리다이렉트하지 않고 401 JSON 으로 응답한다.
                 .exceptionHandling(ex -> ex
@@ -63,6 +76,15 @@ public class SecurityConfig {
     @Bean
     JwtDecoder jwtDecoder(JwtTokenProvider jwtTokenProvider) {
         return jwtTokenProvider.accessTokenDecoder();
+    }
+
+    /**
+     * 재발급·로그아웃 요청에서는 Authorization 헤더를 읽지 않는다.
+     * 클라이언트가 모든 요청에 (만료된) Access Token 을 붙여 보내더라도 이 두 API 가 401 로 막히지 않게 한다.
+     */
+    private BearerTokenResolver bearerTokenResolver() {
+        DefaultBearerTokenResolver delegate = new DefaultBearerTokenResolver();
+        return request -> REFRESH_TOKEN_ENDPOINTS.matches(request) ? null : delegate.resolve(request);
     }
 
     /** JWT 의 role 클레임(OWNER/DIRECTOR)을 Spring Security 권한(ROLE_OWNER/ROLE_DIRECTOR)으로 바꾼다. */

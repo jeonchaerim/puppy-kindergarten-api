@@ -27,7 +27,7 @@ public class KakaoLoginService {
 
     @Transactional
     public User loginOrRegister(Long kakaoId, String nickname) {
-        Role role = resolveRole(kakaoId);
+        Role role = authProperties.resolveRole(kakaoId);
         LocalDateTime now = LocalDateTime.now(clock);
 
         return userRepository.findByKakaoId(kakaoId)
@@ -36,13 +36,5 @@ public class KakaoLoginService {
                     return user;
                 })
                 .orElseGet(() -> userRepository.save(User.register(kakaoId, nickname, role, now)));
-    }
-
-    /**
-     * 역할은 사용자가 고를 수 없다. 서버에 사전 지정된 카카오 회원번호만 원장이 되고,
-     * 그 외에는 모두 견주다. 로그인할 때마다 다시 계산하므로 목록 변경이 다음 로그인에 반영된다.
-     */
-    private Role resolveRole(Long kakaoId) {
-        return authProperties.isDirector(kakaoId) ? Role.DIRECTOR : Role.OWNER;
     }
 }
