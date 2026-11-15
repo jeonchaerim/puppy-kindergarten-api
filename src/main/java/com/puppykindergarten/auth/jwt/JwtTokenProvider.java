@@ -17,7 +17,8 @@ import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.jwt.JwtEncoder;
 import org.springframework.security.oauth2.jwt.JwtEncoderParameters;
 import org.springframework.security.oauth2.jwt.JwtException;
-import org.springframework.security.oauth2.jwt.JwtValidators;
+import org.springframework.security.oauth2.jwt.JwtIssuerValidator;
+import org.springframework.security.oauth2.jwt.JwtTimestampValidator;
 import org.springframework.security.oauth2.jwt.JwsHeader;
 import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
 import org.springframework.security.oauth2.jwt.NimbusJwtEncoder;
@@ -105,8 +106,10 @@ public class JwtTokenProvider {
     private JwtDecoder decoderFor(SecretKey key, String tokenType) {
         // 알고리즘을 HS256 으로 고정한다. (alg=none 이나 다른 알고리즘으로 바꿔치기한 토큰 거부)
         NimbusJwtDecoder decoder = NimbusJwtDecoder.withSecretKey(key).macAlgorithm(MacAlgorithm.HS256).build();
+        // 허용 오차(clock skew)를 두지 않는다. 만료 시각이 지나면 바로 거부한다. (기본값은 60초)
         decoder.setJwtValidator(new DelegatingOAuth2TokenValidator<>(
-                JwtValidators.createDefaultWithIssuer(properties.issuer()),
+                new JwtTimestampValidator(Duration.ZERO),
+                new JwtIssuerValidator(properties.issuer()),
                 new JwtClaimValidator<String>(CLAIM_TOKEN_TYPE, tokenType::equals)));
         return decoder;
     }

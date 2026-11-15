@@ -1,5 +1,6 @@
 package com.puppykindergarten.auth;
 
+import com.puppykindergarten.user.Role;
 import java.util.Set;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
@@ -16,7 +17,11 @@ public record AuthProperties(Set<Long> directorKakaoIds) {
         directorKakaoIds = directorKakaoIds == null ? Set.of() : Set.copyOf(directorKakaoIds);
     }
 
-    public boolean isDirector(Long kakaoId) {
-        return directorKakaoIds.contains(kakaoId);
+    /**
+     * 역할은 사용자가 고를 수 없다. 서버에 사전 지정된 카카오 회원번호만 원장이 되고, 그 외에는 모두 견주다.
+     * 로그인과 토큰 재발급 때마다 이 기준으로 다시 계산한다.
+     */
+    public Role resolveRole(Long kakaoId) {
+        return directorKakaoIds.contains(kakaoId) ? Role.DIRECTOR : Role.OWNER;
     }
 }
