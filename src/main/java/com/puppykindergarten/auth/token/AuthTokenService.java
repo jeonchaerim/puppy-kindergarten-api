@@ -1,13 +1,12 @@
 package com.puppykindergarten.auth.token;
 
+import com.puppykindergarten.auth.AuthProperties;
 import com.puppykindergarten.auth.jwt.JwtTokenProvider;
 import com.puppykindergarten.auth.jwt.JwtTokenProvider.IssuedRefreshToken;
 import com.puppykindergarten.user.Role;
 import com.puppykindergarten.user.User;
 import com.puppykindergarten.user.UserRepository;
 import java.time.Clock;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.jwt.JwtException;
 import org.springframework.stereotype.Service;
@@ -25,18 +24,18 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class AuthTokenService {
 
-    private static final Logger log = LoggerFactory.getLogger(AuthTokenService.class);
-
     private final JwtTokenProvider jwtTokenProvider;
     private final RefreshTokenRepository refreshTokenRepository;
     private final UserRepository userRepository;
+    private final AuthProperties authProperties;
     private final Clock clock;
 
     public AuthTokenService(JwtTokenProvider jwtTokenProvider, RefreshTokenRepository refreshTokenRepository,
-                            UserRepository userRepository, Clock clock) {
+                            UserRepository userRepository, AuthProperties authProperties, Clock clock) {
         this.jwtTokenProvider = jwtTokenProvider;
         this.refreshTokenRepository = refreshTokenRepository;
         this.userRepository = userRepository;
+        this.authProperties = authProperties;
         this.clock = clock;
     }
 
@@ -54,27 +53,24 @@ public class AuthTokenService {
         return TokenPair.bearer(accessToken, jwtTokenProvider.accessTtl().toSeconds(), refreshToken.value());
     }
 
-    /**
-     * Refresh Token 으로 새 토큰 쌍을 발급한다. 사용한 Refresh Token 은 즉시 폐기된다.
-     * 재사용 감지 시의 전체 폐기가 롤백되지 않도록 InvalidRefreshTokenException 은 롤백 대상에서 뺀다.
-     */
-    @Transactional(noRollbackFor = InvalidRefreshTokenException.class)
+    /** Refresh Token 으로 새 토큰 쌍을 발급한다. 사용한 Refresh Token 은 즉시 폐기된다. */
+    @Transactional
     public TokenPair reissue(String refreshToken) {
         Jwt jwt = decode(refreshToken);
         Long userId = Long.valueOf(jwt.getSubject());
 
+        // 저장소에 없으면 이미 교체됐거나 로그아웃된 토큰이다.
         int revoked = refreshTokenRepository.deleteByTokenHash(TokenHasher.sha256Hex(refreshToken));
         if (revoked == 0) {
-            // 서명은 유효한데 저장소에 없다 = 이미 교체됐거나 로그아웃된 토큰이 다시 제시됐다.
-            // 탈취 가능성이 있으므로 해당 사용자의 Refresh Token 을 모두 폐기해 재로그인을 요구한다.
-            int revokedAll = refreshTokenRepository.deleteAllByUserId(userId);
-            log.warn("폐기된 Refresh Token 재사용 감지: userId={}, 함께 폐기한 토큰 수={}", userId, revokedAll);
             throw new InvalidRefreshTokenException();
         }
 
-        // 역할은 토큰이 아니라 DB 의 현재 값을 기준으로 다시 담는다.
         User user = userRepository.findById(userId).orElseThrow(InvalidRefreshTokenException::new);
-        return issue(user.getId(), user.getRole());
+        // 로그인 때와 같은 기준으로 역할을 다시 계산한다.
+        // (원장 목록에서 빠진 사용자가 재발급만으로 원장 권한을 유지하지 못하게 한다)
+        Role role = authProperties.resolveRole(user.getKakaoId());
+        user.syncRole(role);
+        return issue(user.getId(), role);
     }
 
     /** 로그아웃. 이미 폐기된 토큰이어도 조용히 성공한다. (멱등) */
