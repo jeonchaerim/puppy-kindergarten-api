@@ -58,6 +58,11 @@ public class User {
         this.lastLoginAt = now;
     }
 
+    /** 역할만 현재 기준으로 맞춘다. (토큰 재발급 시) */
+    public void syncRole(Role role) {
+        this.role = role;
+    }
+
     public Long getId() {
         return id;
     }

@@ -30,7 +30,6 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
-import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 
@@ -103,28 +102,65 @@ class TokenReissueLogoutTest {
     }
 
     @Test
-    @DisplayName("폐기된 Refresh Token 이 다시 제시되면 그 사용자의 Refresh Token 을 모두 폐기한다 (탈취 대응)")
-    void reuseRevokesAllTokensOfUser() throws Exception {
-        TokenPair stolen = authTokenService.issue(owner.getId(), owner.getRole());
-        String rotated = json(reissue(stolen.refreshToken()).andExpect(status().isOk())).get("refreshToken").asText();
+    @DisplayName("이미 사용한 Refresh Token 을 다시 제시해도 교체로 받은 새 토큰은 계속 유효하다")
+    void reusedTokenDoesNotRevokeOthers() throws Exception {
+        TokenPair issued = authTokenService.issue(owner.getId(), owner.getRole());
+        String rotated = json(reissue(issued.refreshToken()).andExpect(status().isOk())).get("refreshToken").asText();
 
-        reissue(stolen.refreshToken()).andExpect(status().isUnauthorized());
+        reissue(issued.refreshToken()).andExpect(status().isUnauthorized());
 
-        assertThat(refreshTokenRepository.count()).isZero();
-        reissue(rotated).andExpect(status().isUnauthorized());
+        reissue(rotated).andExpect(status().isOk());
     }
 
     @Test
-    @DisplayName("재발급된 Access Token 의 역할은 DB 의 현재 역할을 따른다")
-    void reissuedAccessTokenReflectsCurrentRole() throws Exception {
-        TokenPair issued = authTokenService.issue(owner.getId(), Role.OWNER);
-        owner.recordLogin("초코아빠", Role.DIRECTOR, java.time.LocalDateTime.now());
+    @DisplayName("재발급 시 역할을 다시 계산한다: 원장 목록에서 빠진 사용자는 견주 토큰을 받는다")
+    void reissueDemotesUserRemovedFromDirectorList() throws Exception {
+        // DB 에는 원장으로 남아 있지만, 카카오 ID 1001 은 원장 목록(9001, 9002)에 없다.
+        owner.syncRole(Role.DIRECTOR);
         userRepository.save(owner);
+        TokenPair issued = authTokenService.issue(owner.getId(), Role.DIRECTOR);
 
         String newAccess = json(reissue(issued.refreshToken()).andExpect(status().isOk())).get("accessToken").asText();
 
-        Jwt jwt = jwtTokenProvider.accessTokenDecoder().decode(newAccess);
-        assertThat(jwt.getClaimAsString("role")).isEqualTo("DIRECTOR");
+        assertThat(jwtTokenProvider.accessTokenDecoder().decode(newAccess).getClaimAsString("role")).isEqualTo("OWNER");
+        assertThat(userRepository.findById(owner.getId()).orElseThrow().getRole()).isEqualTo(Role.OWNER);
+    }
+
+    @Test
+    @DisplayName("재발급 시 역할을 다시 계산한다: 원장 목록에 추가된 사용자는 원장 토큰을 받는다")
+    void reissuePromotesUserAddedToDirectorList() throws Exception {
+        // 카카오 ID 9001 은 원장 목록에 있지만, DB 에는 아직 견주로 남아 있다.
+        User director = userRepository.save(User.register(9001L, "해피원장", Role.OWNER, java.time.LocalDateTime.now()));
+        TokenPair issued = authTokenService.issue(director.getId(), Role.OWNER);
+
+        String newAccess = json(reissue(issued.refreshToken()).andExpect(status().isOk())).get("accessToken").asText();
+
+        assertThat(jwtTokenProvider.accessTokenDecoder().decode(newAccess).getClaimAsString("role")).isEqualTo("DIRECTOR");
+        assertThat(userRepository.findById(director.getId()).orElseThrow().getRole()).isEqualTo(Role.DIRECTOR);
+    }
+
+    @Test
+    @DisplayName("만료된 Access Token 이 Authorization 헤더에 붙어 있어도 재발급·로그아웃할 수 있다")
+    void expiredBearerHeaderDoesNotBlockReissueOrLogout() throws Exception {
+        TokenPair issued = authTokenService.issue(owner.getId(), owner.getRole());
+        Clock oneHourAgo = Clock.fixed(Instant.now().minus(Duration.ofHours(1)), ZoneOffset.UTC);
+        String expiredAccess = new JwtTokenProvider(jwtProperties, oneHourAgo).createAccessToken(owner.getId(), Role.OWNER);
+
+        // 같은 헤더로 일반 API 는 거부된다.
+        mockMvc.perform(get("/api/users/me").header("Authorization", "Bearer " + expiredAccess))
+                .andExpect(status().isUnauthorized());
+
+        String rotated = json(mockMvc.perform(post("/api/auth/reissue")
+                        .header("Authorization", "Bearer " + expiredAccess)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("refreshToken", issued.refreshToken()))))
+                .andExpect(status().isOk())).get("refreshToken").asText();
+
+        mockMvc.perform(post("/api/auth/logout")
+                        .header("Authorization", "Bearer " + expiredAccess)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("refreshToken", rotated))))
+                .andExpect(status().isNoContent());
     }
 
     @Test
