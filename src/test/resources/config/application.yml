@@ -20,3 +20,6 @@ spring:
 app:
   auth:
     director-kakao-ids: 9001,9002
+  jwt:
+    # 테스트 전용 더미 키 ("test-only-jwt-secret-key-32bytes!" 의 Base64). 운영 값이 아니다.
+    secret: dGVzdC1vbmx5LWp3dC1zZWNyZXQta2V5LTMyYnl0ZXMh
