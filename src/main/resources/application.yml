@@ -16,6 +16,30 @@ spring:
     properties:
       hibernate:
         format_sql: true
+  security:
+    oauth2:
+      client:
+        registration:
+          kakao:
+            client-id: ${KAKAO_CLIENT_ID}
+            client-secret: ${KAKAO_CLIENT_SECRET}
+            client-name: Kakao
+            authorization-grant-type: authorization_code
+            # 카카오는 client_id/client_secret 을 토큰 요청 본문으로 받는다.
+            client-authentication-method: client_secret_post
+            redirect-uri: "{baseUrl}/login/oauth2/code/{registrationId}"
+            scope: profile_nickname
+        provider:
+          kakao:
+            authorization-uri: https://kauth.kakao.com/oauth/authorize
+            token-uri: https://kauth.kakao.com/oauth/token
+            user-info-uri: https://kapi.kakao.com/v2/user/me
+            user-name-attribute: id
+
+app:
+  auth:
+    # 원장(ROLE_DIRECTOR)으로 지정할 카카오 회원번호. 쉼표로 구분한다. 비어 있으면 모두 견주.
+    director-kakao-ids: ${DIRECTOR_KAKAO_IDS:}
 
 server:
   port: ${SERVER_PORT:8080}
