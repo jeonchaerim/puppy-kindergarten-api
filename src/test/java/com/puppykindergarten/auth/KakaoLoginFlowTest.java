@@ -1,0 +1,209 @@
+package com.puppykindergarten.auth;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+import com.puppykindergarten.user.Role;
+import com.puppykindergarten.user.User;
+import com.puppykindergarten.user.UserRepository;
+import java.util.Map;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.mock.web.MockHttpSession;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
+import org.springframework.test.web.servlet.ResultActions;
+import org.springframework.web.util.UriComponentsBuilder;
+
+/**
+ * 카카오 로그인 전체 흐름 테스트.
+ * 인가 요청 리다이렉트 → 콜백(code, state) → 토큰 교환 → 사용자 조회 → 가입/로그인 까지를
+ * 가짜 카카오 서버를 상대로 실제 시큐리티 필터 체인으로 검증한다.
+ */
+@SpringBootTest
+@AutoConfigureMockMvc
+class KakaoLoginFlowTest {
+
+    private static final FakeKakaoServer KAKAO = new FakeKakaoServer();
+
+    @DynamicPropertySource
+    static void kakaoEndpoints(DynamicPropertyRegistry registry) {
+        registry.add("spring.security.oauth2.client.provider.kakao.token-uri", () -> KAKAO.baseUrl() + "/oauth/token");
+        registry.add("spring.security.oauth2.client.provider.kakao.user-info-uri", () -> KAKAO.baseUrl() + "/v2/user/me");
+    }
+
+    @Autowired
+    MockMvc mockMvc;
+
+    @Autowired
+    UserRepository userRepository;
+
+    @BeforeEach
+    void setUp() {
+        KAKAO.reset();
+        userRepository.deleteAll();
+    }
+
+    @Test
+    @DisplayName("로그인 시작 시 카카오 인가 페이지로 리다이렉트한다")
+    void redirectsToKakaoAuthorizePage() throws Exception {
+        MvcResult result = mockMvc.perform(get("/oauth2/authorization/kakao"))
+                .andExpect(status().is3xxRedirection())
+                .andReturn();
+
+        String location = result.getResponse().getRedirectedUrl();
+        Map<String, String> params = UriComponentsBuilder.fromUriString(location).build().getQueryParams().toSingleValueMap();
+
+        assertThat(location).startsWith("https://kauth.kakao.com/oauth/authorize?");
+        assertThat(params).containsEntry("response_type", "code");
+        assertThat(params).containsEntry("client_id", "test-client-id");
+        assertThat(params).containsEntry("scope", "profile_nickname");
+        assertThat(params.get("redirect_uri")).isEqualTo("http://localhost/login/oauth2/code/kakao");
+        assertThat(params.get("state")).isNotBlank();
+        // client secret 은 브라우저를 거치는 인가 요청에 실리면 안 된다.
+        assertThat(location).doesNotContain("test-client-secret");
+    }
+
+    @Test
+    @DisplayName("최초 로그인: 토큰 교환 후 견주로 가입되고 사용자 정보가 응답된다")
+    void firstLoginRegistersOwner() throws Exception {
+        KAKAO.respondWithUser(1001L, "초코아빠");
+
+        LoginAttempt attempt = startLogin();
+        callback(attempt, "auth-code-1")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.userId").isNumber())
+                .andExpect(jsonPath("$.nickname").value("초코아빠"))
+                .andExpect(jsonPath("$.role").value("OWNER"));
+
+        User saved = userRepository.findByKakaoId(1001L).orElseThrow();
+        assertThat(saved.getRole()).isEqualTo(Role.OWNER);
+
+        // 토큰 요청: authorization_code 방식, client_secret_post
+        assertThat(KAKAO.tokenRequestBodies()).hasSize(1);
+        String tokenRequest = KAKAO.tokenRequestBodies().get(0);
+        assertThat(tokenRequest)
+                .contains("grant_type=authorization_code")
+                .contains("code=auth-code-1")
+                .contains("client_id=test-client-id")
+                .contains("client_secret=test-client-secret");
+        // 사용자 정보 요청: 카카오 access token 을 Bearer 로 전달
+        assertThat(KAKAO.userInfoAuthorizationHeaders()).containsExactly("Bearer " + FakeKakaoServer.ACCESS_TOKEN);
+        // 로그인에 쓰인 세션은 폐기된다.
+        assertThat(attempt.session().isInvalid()).isTrue();
+    }
+
+    @Test
+    @DisplayName("재로그인: 같은 카카오 계정은 중복 가입되지 않는다")
+    void secondLoginDoesNotDuplicateUser() throws Exception {
+        KAKAO.respondWithUser(1001L, "초코아빠");
+
+        callback(startLogin(), "code-a").andExpect(status().isOk());
+        callback(startLogin(), "code-b").andExpect(status().isOk());
+
+        assertThat(userRepository.count()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("사전 지정된 카카오 회원번호로 로그인하면 원장 역할이 된다")
+    void preassignedKakaoIdBecomesDirector() throws Exception {
+        KAKAO.respondWithUser(9001L, "해피원장");
+
+        callback(startLogin(), "code-director")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.role").value("DIRECTOR"));
+    }
+
+    @Test
+    @DisplayName("state 가 일치하지 않는 콜백은 거부하고 카카오 토큰도 요청하지 않는다 (CSRF 방어)")
+    void rejectsCallbackWithWrongState() throws Exception {
+        KAKAO.respondWithUser(1001L, "초코아빠");
+        LoginAttempt attempt = startLogin();
+
+        mockMvc.perform(get("/login/oauth2/code/kakao")
+                        .session(attempt.session())
+                        .param("code", "stolen-code")
+                        .param("state", "forged-state"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("KAKAO_LOGIN_FAILED"));
+
+        assertThat(KAKAO.tokenRequestBodies()).isEmpty();
+        assertThat(userRepository.count()).isZero();
+    }
+
+    @Test
+    @DisplayName("로그인을 시작한 적 없는 콜백(세션 없음)은 거부한다")
+    void rejectsCallbackWithoutLoginStart() throws Exception {
+        mockMvc.perform(get("/login/oauth2/code/kakao")
+                        .param("code", "any-code")
+                        .param("state", "any-state"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("KAKAO_LOGIN_FAILED"));
+
+        assertThat(KAKAO.tokenRequestBodies()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("카카오가 인가 코드를 거부하면 401 을 응답하고 가입시키지 않는다")
+    void failsWhenKakaoRejectsCode() throws Exception {
+        KAKAO.failTokenEndpoint();
+
+        callback(startLogin(), "expired-code")
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("KAKAO_LOGIN_FAILED"))
+                .andExpect(jsonPath("$.message").value("카카오 로그인에 실패했습니다."));
+
+        assertThat(userRepository.count()).isZero();
+    }
+
+    @Test
+    @DisplayName("인증 없이 보호된 API 를 호출하면 리다이렉트가 아니라 401 JSON 을 응답한다")
+    void unauthenticatedRequestGets401() throws Exception {
+        mockMvc.perform(get("/api/home"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("UNAUTHORIZED"));
+    }
+
+    @Test
+    @DisplayName("로그인에 성공해도 세션으로는 보호된 API 에 접근할 수 없다")
+    void sessionDoesNotAuthenticateAfterLogin() throws Exception {
+        KAKAO.respondWithUser(1001L, "초코아빠");
+        LoginAttempt attempt = startLogin();
+        MvcResult login = callback(attempt, "code-1").andExpect(status().isOk()).andReturn();
+
+        MockHttpSession after = (MockHttpSession) login.getRequest().getSession(false);
+        var request = get("/api/home");
+        if (after != null && !after.isInvalid()) {
+            request = request.session(after);
+        }
+        mockMvc.perform(request).andExpect(status().isUnauthorized());
+    }
+
+    private record LoginAttempt(MockHttpSession session, String state) {
+    }
+
+    private LoginAttempt startLogin() throws Exception {
+        MvcResult result = mockMvc.perform(get("/oauth2/authorization/kakao"))
+                .andExpect(status().is3xxRedirection())
+                .andReturn();
+        String state = UriComponentsBuilder.fromUriString(result.getResponse().getRedirectedUrl())
+                .build().getQueryParams().getFirst("state");
+        MockHttpSession session = (MockHttpSession) result.getRequest().getSession(false);
+        return new LoginAttempt(session, java.net.URLDecoder.decode(state, java.nio.charset.StandardCharsets.UTF_8));
+    }
+
+    private ResultActions callback(LoginAttempt attempt, String code) throws Exception {
+        return mockMvc.perform(get("/login/oauth2/code/kakao")
+                .session(attempt.session())
+                .param("code", code)
+                .param("state", attempt.state()));
+    }
+}
