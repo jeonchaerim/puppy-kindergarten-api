@@ -241,6 +241,29 @@ class KakaoLoginFlowTest {
         assertThat(stored.get(0).getUserId()).isEqualTo(body.get("userId").asLong());
     }
 
+    @Test
+    @DisplayName("전체 흐름: 카카오 로그인 → JWT 발급 → 같은 홈 API 가 역할에 따라 다르게 응답한다")
+    void loginThenRoleBasedHome() throws Exception {
+        KAKAO.respondWithUser(1001L, "초코아빠");
+        String ownerToken = objectMapper.readTree(callback(startLogin(), "code-owner")
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString()).get("accessToken").asText();
+
+        KAKAO.respondWithUser(9001L, "해피원장");
+        String directorToken = objectMapper.readTree(callback(startLogin(), "code-director")
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString()).get("accessToken").asText();
+
+        mockMvc.perform(get("/api/home").header("Authorization", "Bearer " + ownerToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.role").value("OWNER"))
+                .andExpect(jsonPath("$.myDogs").isArray())
+                .andExpect(jsonPath("$.enrolledDogs").doesNotExist());
+        mockMvc.perform(get("/api/home").header("Authorization", "Bearer " + directorToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.role").value("DIRECTOR"))
+                .andExpect(jsonPath("$.todayAttendance").value(5))
+                .andExpect(jsonPath("$.myDogs").doesNotExist());
+    }
+
     private record LoginAttempt(MockHttpSession session, String state) {
     }
 
