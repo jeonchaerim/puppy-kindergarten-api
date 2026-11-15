@@ -5,6 +5,7 @@ import com.puppykindergarten.auth.oauth.KakaoOAuth2UserService;
 import com.puppykindergarten.auth.oauth.OAuth2LoginFailureHandler;
 import com.puppykindergarten.auth.oauth.OAuth2LoginSuccessHandler;
 import com.puppykindergarten.user.Role;
+import java.util.Arrays;
 import java.util.List;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -52,7 +53,8 @@ public class SecurityConfig {
                         .requestMatchers("/oauth2/authorization/**", "/login/oauth2/code/**", "/error").permitAll()
                         .requestMatchers(REFRESH_TOKEN_ENDPOINTS).permitAll()
                         // 홈은 견주/원장 역할이 있어야 한다. 응답 내용은 역할에 따라 컨트롤러에서 갈린다.
-                        .requestMatchers("/api/home").hasAnyRole(Role.OWNER.name(), Role.DIRECTOR.name())
+                        .requestMatchers("/api/home").hasAnyRole(
+                                Arrays.stream(Role.values()).map(Role::name).toArray(String[]::new))
                         .anyRequest().authenticated())
                 // 1) 카카오 로그인 → 자체 JWT 발급
                 .oauth2Login(oauth -> oauth

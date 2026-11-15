@@ -62,6 +62,7 @@ class BearerAuthenticationTest {
         mockMvc.perform(get("/api/users/me").header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.userId").value(owner.getId()))
+                .andExpect(jsonPath("$.kakaoId").value(1001))
                 .andExpect(jsonPath("$.nickname").value("초코아빠"))
                 .andExpect(jsonPath("$.role").value("OWNER"));
     }

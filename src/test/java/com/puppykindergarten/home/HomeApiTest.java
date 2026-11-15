@@ -9,10 +9,15 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.nimbusds.jose.jwk.source.ImmutableSecret;
 import com.puppykindergarten.auth.jwt.JwtProperties;
 import com.puppykindergarten.auth.jwt.JwtTokenProvider;
+import com.puppykindergarten.auth.token.RefreshTokenRepository;
 import com.puppykindergarten.user.Role;
+import com.puppykindergarten.user.User;
+import com.puppykindergarten.user.UserRepository;
 import java.time.Instant;
+import java.time.LocalDateTime;
 import java.util.List;
 import javax.crypto.spec.SecretKeySpec;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -42,10 +47,27 @@ class HomeApiTest {
     @Autowired
     JwtProperties jwtProperties;
 
+    @Autowired
+    UserRepository userRepository;
+
+    @Autowired
+    RefreshTokenRepository refreshTokenRepository;
+
+    Long ownerId;
+    Long directorId;
+
+    @BeforeEach
+    void setUp() {
+        refreshTokenRepository.deleteAll();
+        userRepository.deleteAll();
+        ownerId = userRepository.save(User.register(1001L, "초코아빠", Role.OWNER, LocalDateTime.now())).getId();
+        directorId = userRepository.save(User.register(9001L, "해피원장", Role.DIRECTOR, LocalDateTime.now())).getId();
+    }
+
     @Test
     @DisplayName("견주 토큰: 내 반려견과 주변 유치원을 응답한다")
     void ownerHome() throws Exception {
-        String token = jwtTokenProvider.createAccessToken(1L, Role.OWNER);
+        String token = jwtTokenProvider.createAccessToken(ownerId, Role.OWNER);
 
         mockMvc.perform(get("/api/home").header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
                 .andExpect(status().isOk())
@@ -63,7 +85,7 @@ class HomeApiTest {
     @Test
     @DisplayName("원장 토큰: 유치원 이름, 등록된 원생, 오늘 등원 수를 응답한다")
     void directorHome() throws Exception {
-        String token = jwtTokenProvider.createAccessToken(2L, Role.DIRECTOR);
+        String token = jwtTokenProvider.createAccessToken(directorId, Role.DIRECTOR);
 
         mockMvc.perform(get("/api/home").header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
                 .andExpect(status().isOk())
@@ -79,8 +101,8 @@ class HomeApiTest {
     @Test
     @DisplayName("같은 사용자 ID 라도 토큰의 role 이 다르면 응답이 달라진다")
     void responseFollowsRoleClaimNotUserId() throws Exception {
-        String asOwner = jwtTokenProvider.createAccessToken(7L, Role.OWNER);
-        String asDirector = jwtTokenProvider.createAccessToken(7L, Role.DIRECTOR);
+        String asOwner = jwtTokenProvider.createAccessToken(ownerId, Role.OWNER);
+        String asDirector = jwtTokenProvider.createAccessToken(ownerId, Role.DIRECTOR);
 
         mockMvc.perform(get("/api/home").header(HttpHeaders.AUTHORIZATION, "Bearer " + asOwner))
                 .andExpect(jsonPath("$.role").value("OWNER"));
@@ -91,7 +113,7 @@ class HomeApiTest {
     @Test
     @DisplayName("역할은 요청 파라미터로 바꿀 수 없다")
     void roleCannotBeOverriddenByRequest() throws Exception {
-        String token = jwtTokenProvider.createAccessToken(1L, Role.OWNER);
+        String token = jwtTokenProvider.createAccessToken(ownerId, Role.OWNER);
 
         mockMvc.perform(get("/api/home").param("role", "DIRECTOR")
                         .header("X-Role", "DIRECTOR")
@@ -99,6 +121,17 @@ class HomeApiTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.role").value("OWNER"))
                 .andExpect(jsonPath("$.enrolledDogs").doesNotExist());
+    }
+
+    @Test
+    @DisplayName("토큰은 유효하지만 회원이 없으면(탈퇴 등) 404")
+    void deletedUserGetsNotFound() throws Exception {
+        String token = jwtTokenProvider.createAccessToken(ownerId, Role.OWNER);
+        userRepository.deleteById(ownerId);
+
+        mockMvc.perform(get("/api/home").header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("NOT_FOUND"));
     }
 
     @Test
