@@ -112,6 +112,17 @@ class BearerAuthenticationTest {
     }
 
     @Test
+    @DisplayName("컨트롤러에서 난 오류(404)도 공통 에러 형식으로 응답한다")
+    void controllerErrorUsesCommonFormat() throws Exception {
+        String tokenOfDeletedUser = jwtTokenProvider.createAccessToken(999_999L, Role.OWNER);
+
+        mockMvc.perform(get("/api/users/me").header(HttpHeaders.AUTHORIZATION, "Bearer " + tokenOfDeletedUser))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("NOT_FOUND"))
+                .andExpect(jsonPath("$.message").value("사용자를 찾을 수 없습니다."));
+    }
+
+    @Test
     @DisplayName("JWT 형식이 아닌 값은 401 INVALID_TOKEN")
     void malformedTokenIsRejected() throws Exception {
         mockMvc.perform(get("/api/users/me").header(HttpHeaders.AUTHORIZATION, "Bearer not-a-jwt"))

@@ -41,9 +41,6 @@ public class AuthTokenService {
 
     @Transactional
     public TokenPair issue(Long userId, Role role) {
-        // 만료돼서 더는 쓸 수 없는 기록은 발급 시점에 정리한다.
-        refreshTokenRepository.deleteExpiredByUserId(userId, clock.instant());
-
         String accessToken = jwtTokenProvider.createAccessToken(userId, role);
         IssuedRefreshToken refreshToken = jwtTokenProvider.createRefreshToken(userId);
 

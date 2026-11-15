@@ -12,6 +12,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.puppykindergarten.auth.jwt.JwtProperties;
 import com.puppykindergarten.auth.jwt.JwtTokenProvider;
 import com.puppykindergarten.auth.token.AuthTokenService;
+import com.puppykindergarten.auth.token.RefreshToken;
+import com.puppykindergarten.auth.token.RefreshTokenCleanupJob;
 import com.puppykindergarten.auth.token.RefreshTokenRepository;
 import com.puppykindergarten.auth.token.TokenHasher;
 import com.puppykindergarten.auth.token.TokenPair;
@@ -22,7 +24,14 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -31,6 +40,7 @@ import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMock
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.ResultActions;
 
 @SpringBootTest
@@ -57,6 +67,9 @@ class TokenReissueLogoutTest {
 
     @Autowired
     UserRepository userRepository;
+
+    @Autowired
+    RefreshTokenCleanupJob refreshTokenCleanupJob;
 
     User owner;
 
@@ -240,6 +253,66 @@ class TokenReissueLogoutTest {
 
         reissue(tablet.refreshToken()).andExpect(status().isOk());
         reissue(othersToken.refreshToken()).andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("JSON 이 아닌 요청(415)도 공통 에러 형식으로 응답한다")
+    void unsupportedMediaTypeUsesCommonErrorFormat() throws Exception {
+        mockMvc.perform(post("/api/auth/reissue")
+                        .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                        .content("refreshToken=abc"))
+                .andExpect(status().isUnsupportedMediaType())
+                .andExpect(jsonPath("$.code").value("UNSUPPORTED_MEDIA_TYPE"))
+                .andExpect(jsonPath("$.message").isNotEmpty());
+    }
+
+    @Test
+    @DisplayName("같은 Refresh Token 으로 동시에 재발급을 요청하면 한 요청만 성공하고, 그 결과 토큰은 유효하다")
+    void concurrentReissueSucceedsExactlyOnce() throws Exception {
+        TokenPair issued = authTokenService.issue(owner.getId(), owner.getRole());
+        int requests = 4;
+        ExecutorService pool = Executors.newFixedThreadPool(requests);
+        CountDownLatch start = new CountDownLatch(1);
+        List<Future<MvcResult>> futures = new ArrayList<>();
+        for (int i = 0; i < requests; i++) {
+            futures.add(pool.submit(() -> {
+                start.await();
+                return reissue(issued.refreshToken()).andReturn();
+            }));
+        }
+        start.countDown();
+
+        List<String> winners = new ArrayList<>();
+        for (Future<MvcResult> future : futures) {
+            MvcResult result = future.get(30, TimeUnit.SECONDS);
+            if (result.getResponse().getStatus() == 200) {
+                winners.add(objectMapper.readTree(result.getResponse().getContentAsString()).get("refreshToken").asText());
+            } else {
+                assertThat(result.getResponse().getStatus()).isEqualTo(401);
+            }
+        }
+        pool.shutdown();
+
+        assertThat(winners).hasSize(1);
+        assertThat(refreshTokenRepository.count()).isEqualTo(1);
+        reissue(winners.get(0)).andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("정리 작업은 만료된 Refresh Token 기록만 지운다")
+    void cleanupJobPurgesOnlyExpiredTokens() {
+        Instant now = Instant.now();
+        refreshTokenRepository.save(new RefreshToken(owner.getId(), TokenHasher.sha256Hex("expired"),
+                now.minus(Duration.ofDays(1)), now.minus(Duration.ofDays(15))));
+        refreshTokenRepository.save(new RefreshToken(owner.getId(), TokenHasher.sha256Hex("alive"),
+                now.plus(Duration.ofDays(1)), now));
+
+        int deleted = refreshTokenCleanupJob.purgeExpired();
+
+        assertThat(deleted).isEqualTo(1);
+        assertThat(refreshTokenRepository.findAll())
+                .extracting("tokenHash")
+                .containsExactly(TokenHasher.sha256Hex("alive"));
     }
 
     private ResultActions reissue(String refreshToken) throws Exception {

@@ -74,6 +74,18 @@ class JwtTokenProviderTest {
     }
 
     @Test
+    @DisplayName("만료 시각이 지나면 허용 오차 없이 바로 거부한다")
+    void rejectsJustExpiredTokenWithoutLeeway() {
+        // 유효 시간 15분짜리 토큰을 15분 5초 전에 발급 = 5초 전에 만료
+        JwtTokenProvider past = new JwtTokenProvider(properties,
+                clockAt(Instant.now().minus(Duration.ofMinutes(15)).minusSeconds(5)));
+
+        assertThatThrownBy(() -> provider.accessTokenDecoder().decode(past.createAccessToken(42L, Role.OWNER)))
+                .isInstanceOf(JwtValidationException.class)
+                .hasMessageContaining("expired");
+    }
+
+    @Test
     @DisplayName("다른 키로 서명한 토큰은 거부한다")
     void rejectsTokenSignedWithAnotherKey() {
         JwtTokenProvider attacker = new JwtTokenProvider(
