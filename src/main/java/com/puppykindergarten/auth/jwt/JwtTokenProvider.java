@@ -5,12 +5,14 @@ import com.puppykindergarten.user.Role;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Objects;
 import java.util.UUID;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.SecretKeySpec;
 import org.springframework.security.oauth2.core.DelegatingOAuth2TokenValidator;
 import org.springframework.security.oauth2.jose.jws.MacAlgorithm;
 import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.security.oauth2.jwt.JwtClaimNames;
 import org.springframework.security.oauth2.jwt.JwtClaimValidator;
 import org.springframework.security.oauth2.jwt.JwtClaimsSet;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
@@ -75,6 +77,17 @@ public class JwtTokenProvider {
         return new IssuedRefreshToken(encode(claims), expiresAt);
     }
 
+    private static boolean isUserId(Object subject) {
+        if (!(subject instanceof String value)) {
+            return false;
+        }
+        try {
+            return Long.parseLong(value) > 0;
+        } catch (NumberFormatException e) {
+            return false;
+        }
+    }
+
     /** 검증된 토큰의 주인(sub 클레임 = users.id). 토큰에서 사용자 ID 를 꺼내는 곳은 여기 하나다. */
     public static Long userIdOf(Jwt jwt) {
         return Long.valueOf(jwt.getSubject());
@@ -115,6 +128,9 @@ public class JwtTokenProvider {
         decoder.setJwtValidator(new DelegatingOAuth2TokenValidator<>(
                 new JwtTimestampValidator(Duration.ZERO),
                 new JwtIssuerValidator(properties.issuer()),
+                // 만료 검증기는 exp 가 아예 없으면 통과시키므로, 만료 시각과 사용자 식별자를 필수로 요구한다.
+                new JwtClaimValidator<Object>(JwtClaimNames.EXP, Objects::nonNull),
+                new JwtClaimValidator<Object>(JwtClaimNames.SUB, JwtTokenProvider::isUserId),
                 new JwtClaimValidator<String>(CLAIM_TOKEN_TYPE, tokenType::equals)));
         return decoder;
     }

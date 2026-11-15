@@ -2,6 +2,9 @@ package com.puppykindergarten.auth.oauth;
 
 import com.puppykindergarten.auth.KakaoLoginService;
 import com.puppykindergarten.user.User;
+import org.springframework.dao.DataAccessException;
+import org.springframework.security.authentication.InternalAuthenticationServiceException;
+import org.springframework.transaction.TransactionException;
 import org.springframework.security.oauth2.client.userinfo.DefaultOAuth2UserService;
 import org.springframework.security.oauth2.client.userinfo.OAuth2UserRequest;
 import org.springframework.security.oauth2.core.OAuth2AuthenticationException;
@@ -16,15 +19,23 @@ public class KakaoOAuth2UserService extends DefaultOAuth2UserService {
 
     private final KakaoLoginService kakaoLoginService;
 
-    public KakaoOAuth2UserService(KakaoLoginService kakaoLoginService) {
+    public KakaoOAuth2UserService(KakaoLoginService kakaoLoginService, KakaoRestClients kakaoRestClients) {
         this.kakaoLoginService = kakaoLoginService;
+        setRestOperations(kakaoRestClients.userInfoRestOperations());
     }
 
     @Override
     public OAuth2User loadUser(OAuth2UserRequest userRequest) throws OAuth2AuthenticationException {
         OAuth2User kakaoUser = super.loadUser(userRequest);
         KakaoUserInfo info = KakaoUserInfo.from(kakaoUser.getAttributes());
-        User user = kakaoLoginService.loginOrRegister(info.kakaoId(), info.nickname());
+        User user;
+        try {
+            user = kakaoLoginService.loginOrRegister(info.kakaoId(), info.nickname());
+        } catch (DataAccessException | TransactionException e) {
+            // 사용자의 인증 실패가 아니라 서버(DB) 문제다. 실패 핸들러가 401 과 구분해 500 으로 응답한다.
+            // DB 연결 자체가 안 되면 DataAccessException 이 아니라 트랜잭션 시작 단계의 TransactionException 이 난다.
+            throw new InternalAuthenticationServiceException("회원 정보를 저장하지 못했습니다.", e);
+        }
         return new KakaoOAuth2User(user, kakaoUser.getAttributes());
     }
 }

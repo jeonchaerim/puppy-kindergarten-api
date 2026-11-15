@@ -2,6 +2,7 @@ package com.puppykindergarten.config;
 
 import com.puppykindergarten.auth.jwt.JwtTokenProvider;
 import com.puppykindergarten.auth.oauth.KakaoOAuth2UserService;
+import com.puppykindergarten.auth.oauth.KakaoRestClients;
 import com.puppykindergarten.auth.oauth.OAuth2LoginFailureHandler;
 import com.puppykindergarten.auth.oauth.OAuth2LoginSuccessHandler;
 import com.puppykindergarten.user.Role;
@@ -36,6 +37,7 @@ public class SecurityConfig {
     @Bean
     SecurityFilterChain securityFilterChain(HttpSecurity http,
                                             KakaoOAuth2UserService kakaoOAuth2UserService,
+                                            KakaoRestClients kakaoRestClients,
                                             OAuth2LoginSuccessHandler successHandler,
                                             OAuth2LoginFailureHandler failureHandler,
                                             JwtDecoder jwtDecoder,
@@ -58,6 +60,7 @@ public class SecurityConfig {
                         .anyRequest().authenticated())
                 // 1) 카카오 로그인 → 자체 JWT 발급
                 .oauth2Login(oauth -> oauth
+                        .tokenEndpoint(token -> token.accessTokenResponseClient(kakaoRestClients.tokenResponseClient()))
                         .userInfoEndpoint(userInfo -> userInfo.userService(kakaoOAuth2UserService))
                         .successHandler(successHandler)
                         .failureHandler(failureHandler))
