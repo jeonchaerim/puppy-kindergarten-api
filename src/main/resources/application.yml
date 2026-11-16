@@ -1,0 +1,54 @@
+spring:
+  application:
+    name: puppy-kindergarten-api
+  config:
+    # 로컬 실행 시 프로젝트 루트의 .env 를 읽는다. 파일이 없으면 OS 환경변수만 사용한다.
+    import: optional:file:.env[.properties]
+  datasource:
+    url: jdbc:mysql://${DB_HOST:localhost}:${DB_PORT:3306}/${DB_NAME:puppy_kindergarten}?serverTimezone=Asia/Seoul&characterEncoding=UTF-8
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: ${JPA_DDL_AUTO:update}
+    properties:
+      hibernate:
+        format_sql: true
+  security:
+    oauth2:
+      client:
+        registration:
+          kakao:
+            client-id: ${KAKAO_CLIENT_ID}
+            client-secret: ${KAKAO_CLIENT_SECRET}
+            client-name: Kakao
+            authorization-grant-type: authorization_code
+            # 카카오는 client_id/client_secret 을 토큰 요청 본문으로 받는다.
+            client-authentication-method: client_secret_post
+            redirect-uri: "{baseUrl}/login/oauth2/code/{registrationId}"
+            scope: profile_nickname
+        provider:
+          kakao:
+            authorization-uri: https://kauth.kakao.com/oauth/authorize
+            token-uri: https://kauth.kakao.com/oauth/token
+            user-info-uri: https://kapi.kakao.com/v2/user/me
+            user-name-attribute: id
+
+app:
+  auth:
+    # 원장(ROLE_DIRECTOR)으로 지정할 카카오 회원번호. 쉼표로 구분한다. 비어 있으면 모두 견주.
+    director-kakao-ids: ${DIRECTOR_KAKAO_IDS:}
+    # 카카오 서버 호출 제한 시간 (토큰 교환, 사용자 정보 조회)
+    kakao-connect-timeout: ${KAKAO_CONNECT_TIMEOUT:3s}
+    kakao-read-timeout: ${KAKAO_READ_TIMEOUT:5s}
+  jwt:
+    # HS256 서명키 (Base64, 32바이트 이상). 기본값을 두지 않아 없으면 기동에 실패한다.
+    secret: ${JWT_SECRET}
+    issuer: ${JWT_ISSUER:puppy-kindergarten-api}
+    access-ttl: ${JWT_ACCESS_TTL:15m}
+    refresh-ttl: ${JWT_REFRESH_TTL:14d}
+
+server:
+  port: ${SERVER_PORT:8080}

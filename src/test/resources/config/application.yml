@@ -1,0 +1,30 @@
+# 테스트 전용 덮어쓰기. (classpath:/config/ 는 main 의 application.yml 보다 우선한다)
+# DB 는 Testcontainers 가 Docker 로 띄우는 MySQL 8.0 을 쓴다. (로컬 MySQL·.env 불필요, Docker 만 필요)
+# 카카오는 테스트 안의 가짜 서버를 쓰므로 클라이언트 값은 더미다.
+spring:
+  datasource:
+    # jdbc:tc: 로 시작하면 Testcontainers 가 첫 연결 때 컨테이너를 띄운다.
+    # TC_DAEMON: 테스트가 끝날 때까지(JVM 종료 시까지) 컨테이너를 하나로 재사용한다.
+    url: jdbc:tc:mysql:8.0:///puppy_kindergarten_test?TC_DAEMON=true
+    username: test
+    password: test
+    driver-class-name: org.testcontainers.jdbc.ContainerDatabaseDriver
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+  security:
+    oauth2:
+      client:
+        registration:
+          kakao:
+            client-id: test-client-id
+            client-secret: test-client-secret
+
+app:
+  auth:
+    director-kakao-ids: 9001,9002
+    kakao-connect-timeout: 1s
+    kakao-read-timeout: 1s
+  jwt:
+    # 테스트 전용 더미 키 ("test-only-jwt-secret-key-32bytes!" 의 Base64). 운영 값이 아니다.
+    secret: dGVzdC1vbmx5LWp3dC1zZWNyZXQta2V5LTMyYnl0ZXMh
